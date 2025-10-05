@@ -1,287 +1,197 @@
-import { Lipsync } from 'wawa-lipsync';
+import { Lipsync } from "wawa-lipsync";
 
 // Create lipsync manager
 const lipsyncManager = new Lipsync();
 
 // DOM elements
-const audioFile = document.getElementById('audioFile');
-const audioPlayer = document.getElementById('audioPlayer');
-const playBtn = document.getElementById('playBtn');
-const pauseBtn = document.getElementById('pauseBtn');
-const stopBtn = document.getElementById('stopBtn');
-const visemeDisplay = document.getElementById('visemeDisplay');
-const statusMessage = document.getElementById('statusMessage');
-const mouthImage = document.getElementById('mouthImage');
-const visemeChart = document.getElementById('visemeChart');
+const audioFile = document.getElementById("audioFile");
+const audioPlayer = document.getElementById("audioPlayer");
+const playBtn = document.getElementById("playBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const stopBtn = document.getElementById("stopBtn");
+const visemeDisplay = document.getElementById("visemeText");
+const statusMessage = document.getElementById("statusMessage");
+const mouthImage = document.getElementById("mouthImage");
 
 let isConnected = false;
 let animationFrameId = null;
 
-// Capture state for JSON export
-let mouthCues = [];
-let currentViseme = 'X';
-let segmentStart = 0;
-let uploadedFileName = '';
-let audioDuration = 0;
-
-// Utils
-const round2 = (t) => Math.round(t * 100) / 100;
-
-function showStatus(message, type = 'info') {
+// Show status message
+function showStatus(message, type = "info") {
   statusMessage.textContent = message;
   statusMessage.className = `status ${type}`;
-  statusMessage.classList.remove('hidden');
-  setTimeout(() => statusMessage.classList.add('hidden'), 3000);
+  statusMessage.classList.remove("hidden");
+
+  setTimeout(() => {
+    statusMessage.classList.add("hidden");
+  }, 3000);
 }
+
+// Preload all mouth images
+const mouthImages = {};
+const visemeLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'X'];
+visemeLetters.forEach(letter => {
+  const img = new Image();
+  img.src = `mouths/${letter}.png`;
+  mouthImages[letter] = img;
+  img.onload = () => console.log(`✅ Preloaded: mouths/${letter}.png`);
+  img.onerror = () => console.error(`❌ Failed to preload: mouths/${letter}.png`);
+});
 
 // Update mouth image based on viseme
 function updateMouthImage(viseme) {
-  const imagePath = `./mouths/${viseme}.png`;
-  mouthImage.src = imagePath;
-  mouthImage.onerror = () => {
-    // Fallback to X (neutral) if image fails to load
-    mouthImage.src = './mouths/X.png';
-  };
-}
+  // Make sure it's uppercase
+  const visemeUpper = String(viseme).toUpperCase().trim();
+  
+  console.log("Viseme:", visemeUpper);
 
-// Build viseme chart UI
-(function initVisemeChart() {
-  const visemes = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'X'];
-  visemes.forEach((viseme) => {
-    const item = document.createElement('div');
-    item.className = 'viseme-item';
-    item.dataset.viseme = viseme;
-    item.innerHTML = `
-      <span class="viseme-char">${viseme}</span>
-      <span>${viseme === 'X' ? 'Rest' : 'Viseme'}</span>
-    `;
-    if (viseme === 'X') item.classList.add('active');
-    visemeChart.appendChild(item);
-  });
-  updateMouthImage('X');
-  visemeDisplay.textContent = 'X';
-})();
-
-// Reset capture state (called when loading a new file or stopping)
-function resetCapture() {
-  mouthCues = [];
-  currentViseme = 'X';
-  segmentStart = 0;
-  audioDuration = 0;
+  // Use preloaded image if available, otherwise fallback to path
+  if (mouthImages[visemeUpper] && mouthImages[visemeUpper].complete) {
+    mouthImage.src = mouthImages[visemeUpper].src;
+    console.log(`✅ Using preloaded image for ${visemeUpper}`);
+  } else {
+    // Fallback to direct path
+    mouthImage.src = `mouths/${visemeUpper}.png`;
+    console.log(`⚠️ Fallback path for ${visemeUpper}: mouths/${visemeUpper}.png`);
+  }
 }
 
 // Handle file selection
-audioFile.addEventListener('change', (e) => {
+audioFile.addEventListener("change", (e) => {
   const file = e.target.files[0];
-  if (!file) return;
+  if (file) {
+    const url = URL.createObjectURL(file);
+    audioPlayer.src = url;
 
-  uploadedFileName = file.name;
-
-  // Reset state
-  if (animationFrameId) cancelAnimationFrame(animationFrameId);
-  resetCapture();
-
-  const url = URL.createObjectURL(file);
-  audioPlayer.src = url;
-
-  // Connect after metadata for duration
-  audioPlayer.addEventListener(
-    'loadedmetadata',
-    () => {
-      audioDuration = audioPlayer.duration || 0;
-      try {
-        lipsyncManager.connectAudio(audioPlayer);
-        isConnected = true;
-        playBtn.disabled = false;
-        pauseBtn.disabled = true;
-        stopBtn.disabled = true;
-        showStatus(`✅ Audio file loaded: ${uploadedFileName}`, 'success');
-      } catch (error) {
-        showStatus('❌ Error connecting audio: ' + error.message, 'error');
-        console.error('Connection error:', error);
-      }
-    },
-    { once: true }
-  );
+    // Wait for audio to be ready before connecting
+    audioPlayer.addEventListener(
+      "loadedmetadata",
+      () => {
+        try {
+          lipsyncManager.connectAudio(audioPlayer);
+          isConnected = true;
+          playBtn.disabled = false;
+          showStatus("✅ Audio file loaded successfully!", "success");
+        } catch (error) {
+          showStatus("❌ Error connecting audio: " + error.message, "error");
+          console.error("Connection error:", error);
+        }
+      },
+      { once: true }
+    );
+  }
 });
 
-// Animation loop: analyze audio, update UI, capture viseme segments
+// Animation loop
 function analyzeAudio() {
-  if (audioPlayer.paused) return;
+  if (!audioPlayer.paused) {
+    lipsyncManager.processAudio();
+    const viseme = lipsyncManager.viseme;
 
-  lipsyncManager.processAudio();
-  const now = audioPlayer.currentTime || 0;
-  const viseme = lipsyncManager.viseme || 'X';
+    console.log("Raw viseme from library:", viseme, "Type:", typeof viseme);
 
-  // Initialize first segment on first frame of playback
-  if (mouthCues.length === 0 && now === 0) {
-    currentViseme = viseme;
-    segmentStart = 0;
-  }
+    // Update the text display
+    visemeDisplay.textContent = viseme;
 
-  // If viseme changed, close previous segment and start a new one
-  if (viseme !== currentViseme) {
-    // Close previous
-    mouthCues.push({
-      start: round2(segmentStart),
-      end: round2(now),
-      value: currentViseme,
+    // Update the mouth image
+    updateMouthImage(viseme);
+
+    // Highlight active viseme in chart
+    const visemeUpper = String(viseme).toUpperCase();
+    document.querySelectorAll(".viseme-item").forEach((item) => {
+      if (item.dataset.viseme === visemeUpper) {
+        item.classList.add("active");
+      } else {
+        item.classList.remove("active");
+      }
     });
 
-    // Start new
-    currentViseme = viseme;
-    segmentStart = now;
+    animationFrameId = requestAnimationFrame(analyzeAudio);
   }
-
-  // Update UI
-  visemeDisplay.textContent = viseme;
-  updateMouthImage(viseme);
-  document.querySelectorAll('.viseme-item').forEach((item) => {
-    if (item.dataset.viseme === viseme) item.classList.add('active');
-    else item.classList.remove('active');
-  });
-
-  animationFrameId = requestAnimationFrame(analyzeAudio);
-}
-
-// Finalize segments and download JSON
-function finalizeAndDownloadJSON() {
-  const endTime = audioPlayer.duration || audioPlayer.currentTime || 0;
-
-  // Close the last open segment, if any
-  if (segmentStart <= endTime) {
-    mouthCues.push({
-      start: round2(segmentStart),
-      end: round2(endTime),
-      value: currentViseme,
-    });
-  }
-
-  // Build JSON object
-  const data = {
-    metadata: {
-      soundFile: uploadedFileName || 'unknown',
-      duration: round2(endTime),
-    },
-    mouthCues,
-  };
-
-  // Create a download
-  const base =
-    (uploadedFileName && uploadedFileName.replace(/\.[^/.]+$/, '')) ||
-    'audio';
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: 'application/json',
-  });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${base}.visemes.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
-
-  showStatus('📄 Viseme JSON downloaded', 'success');
 }
 
 // Play button
-playBtn.addEventListener('click', () => {
-  if (!isConnected) return;
-
-  // Reset capture if we are starting from 0 again
-  if (audioPlayer.currentTime === 0) {
-    resetCapture();
-    // Initialize first segment with current (likely X)
-    lipsyncManager.processAudio();
-    currentViseme = lipsyncManager.viseme || 'X';
-    segmentStart = 0;
+playBtn.addEventListener("click", () => {
+  if (isConnected) {
+    audioPlayer.play();
+    playBtn.disabled = true;
+    pauseBtn.disabled = false;
+    stopBtn.disabled = false;
+    analyzeAudio();
+    showStatus("🎵 Playing audio...", "info");
   }
-
-  audioPlayer.play();
-  playBtn.disabled = true;
-  pauseBtn.disabled = false;
-  stopBtn.disabled = false;
-  analyzeAudio();
-  showStatus('🎵 Playing audio...', 'info');
 });
 
 // Pause button
-pauseBtn.addEventListener('click', () => {
+pauseBtn.addEventListener("click", () => {
   audioPlayer.pause();
   playBtn.disabled = false;
   pauseBtn.disabled = true;
-  if (animationFrameId) cancelAnimationFrame(animationFrameId);
-  showStatus('⏸️ Audio paused', 'info');
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+  }
+  showStatus("⏸️ Audio paused", "info");
 });
 
 // Stop button
-stopBtn.addEventListener('click', () => {
-  // Stop playback
+stopBtn.addEventListener("click", () => {
   audioPlayer.pause();
   audioPlayer.currentTime = 0;
-
-  // Cancel loop
-  if (animationFrameId) cancelAnimationFrame(animationFrameId);
-
-  // Close any open segment up to current time (0)
-  if (mouthCues.length === 0) {
-    // If nothing captured, produce a single X segment [0, 0]
-    mouthCues.push({ start: 0, end: 0, value: 'X' });
-  } else {
-    // If last segment is still open and starts > 0, close it at current time
-    const endTime = audioPlayer.currentTime || 0;
-    if (segmentStart < endTime) {
-      mouthCues.push({
-        start: round2(segmentStart),
-        end: round2(endTime),
-        value: currentViseme,
-      });
-    }
+  playBtn.disabled = false;
+  pauseBtn.disabled = true;
+  stopBtn.disabled = true;
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
   }
-
-  // Reset UI
-  visemeDisplay.textContent = 'X';
-  updateMouthImage('X');
-  document.querySelectorAll('.viseme-item').forEach((i) =>
-    i.classList.remove('active')
-  );
+  visemeDisplay.textContent = "X";
+  updateMouthImage("X");
+  document.querySelectorAll(".viseme-item").forEach((item) => {
+    item.classList.remove("active");
+  });
   document
     .querySelector('.viseme-item[data-viseme="X"]')
-    ?.classList.add('active');
+    .classList.add("active");
+  showStatus("⏹️ Audio stopped", "info");
+});
 
+// Handle audio end
+audioPlayer.addEventListener("ended", () => {
   playBtn.disabled = false;
   pauseBtn.disabled = true;
   stopBtn.disabled = true;
-
-  // Optional: also download partial JSON on stop
-  finalizeAndDownloadJSON();
-
-  // Prepare for next run
-  resetCapture();
-  showStatus('⏹️ Audio stopped and JSON exported', 'info');
-});
-
-// Handle audio ended
-audioPlayer.addEventListener('ended', () => {
-  if (animationFrameId) cancelAnimationFrame(animationFrameId);
-
-  // Finalize the last segment to the end of audio and download
-  finalizeAndDownloadJSON();
-
-  // Reset UI
-  playBtn.disabled = false;
-  pauseBtn.disabled = true;
-  stopBtn.disabled = true;
-  visemeDisplay.textContent = 'X';
-  updateMouthImage('X');
-  document.querySelectorAll('.viseme-item').forEach((i) =>
-    i.classList.remove('active')
-  );
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+  }
+  visemeDisplay.textContent = "X";
+  updateMouthImage("X");
+  document.querySelectorAll(".viseme-item").forEach((item) => {
+    item.classList.remove("active");
+  });
   document
     .querySelector('.viseme-item[data-viseme="X"]')
-    ?.classList.add('active');
-
-  // Prepare for next playback
-  resetCapture();
-  showStatus('✅ Audio finished. JSON exported.', 'success');
+    .classList.add("active");
+  showStatus("✅ Audio finished playing", "success");
 });
+
+// Create viseme chart
+const visemes = ["A", "B", "C", "D", "E", "F", "G", "H", "X"];
+const visemeChart = document.getElementById("visemeChart");
+
+visemes.forEach((viseme) => {
+  const item = document.createElement("div");
+  item.className = "viseme-item";
+  item.dataset.viseme = viseme;
+  item.innerHTML = `
+        <span class="viseme-char">${viseme}</span>
+        <span>${viseme === "X" ? "Rest" : "Viseme"}</span>
+    `;
+  if (viseme === "X") {
+    item.classList.add("active");
+  }
+  visemeChart.appendChild(item);
+});
+
+// Initialize with neutral mouth
+updateMouthImage("X");
+
+console.log("Lipsync test platform initialized!");
